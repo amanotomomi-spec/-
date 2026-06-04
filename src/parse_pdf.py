@@ -52,11 +52,14 @@ def parse_schedule(pdf_paths: list[str]) -> MeetingInfo:
         info.time = f"{ampm}{hour}時{minute}分"
 
     # 議事日程
-    for m in re.finditer(r"日程第\s*(\d+)\s+(.+?)(?=日程第|\Z)", full_text, re.DOTALL):
+    for m in re.finditer(r"日程第\s*(\d+)\s+(.*?)(?=日程第\s*\d|\Z)", full_text, re.DOTALL):
         num = int(m.group(1))
-        raw = m.group(2).strip().split("\n")[0].strip()
-        # 余分な空白・改行除去
-        title = re.sub(r"\s+", "", raw)
+        raw = m.group(2).strip()
+        # 複数行をまとめて1行にする（提案理由説明・質疑等の補足行は除く）
+        lines = [l.strip() for l in raw.split("\n") if l.strip()]
+        # 「提案理由説明」「質疑・討論・採決」「一括上程」などの補足行を除去
+        content_lines = [l for l in lines if not re.match(r"(提案理由説明|質疑[・.討論採決]+|一括上程|[①②③\d]+\))", l)]
+        title = re.sub(r"\s+", "", " ".join(content_lines))
         if title:
             info.items.append(ScheduleItem(number=num, title=title))
 
