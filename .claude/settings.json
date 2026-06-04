@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python*)",
+      "Bash(pytest*)",
+      "Bash(mypy*)",
+      "Bash(pip install*)",
+      "Bash(git add*)",
+      "Bash(git commit*)",
+      "Bash(git push -u*)"
+    ],
+    "deny": []
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"\nimport sys, json, re\ntry:\n    payload = json.load(sys.stdin)\nexcept Exception:\n    sys.exit(0)\ncmd = payload.get('tool_input', {}).get('command', '')\ndangerous_patterns = [\n    r'rm\\\\s+-rf',\n    r'git\\\\s+push\\\\s+--force',\n    r'git\\\\s+push\\\\s+-f(?:\\\\s|$)',\n    r'drop\\\\s+table',\n]\nfor pattern in dangerous_patterns:\n    if re.search(pattern, cmd, re.IGNORECASE):\n        print(f'BLOCKED: 危険なコマンドパターンが検出されました: {pattern}', file=sys.stderr)\n        sys.exit(1)\nsys.exit(0)\n\""
+          }
+        ]
+      }
+    ]
+  }
+}
