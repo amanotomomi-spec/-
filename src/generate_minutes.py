@@ -7,16 +7,20 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from parse_pdf import MeetingInfo
 
 
-# 半角→全角変換テーブル
-_HAN_TO_ZEN = str.maketrans(
-    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ ",
-    "０１２３４５６７８９ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ！"＃＄％＆'（）＊＋，－．／：；＜＝＞？＠［￥］＾＿｀｛｜｝～　"
-)
-
-
 def to_zenkaku(text: str) -> str:
-    """発言内容の半角文字を全角に変換"""
-    return text.translate(_HAN_TO_ZEN)
+    """発言内容の半角英数字・記号を全角に変換"""
+    result = []
+    for ch in text:
+        code = ord(ch)
+        # 半角英数字・記号（U+0021〜U+007E）→ 全角（U+FF01〜U+FF5E）
+        if 0x21 <= code <= 0x7E:
+            result.append(chr(code + 0xFEE0))
+        # 半角スペース → 全角スペース
+        elif ch == " ":
+            result.append("　")
+        else:
+            result.append(ch)
+    return "".join(result)
 
 
 def _is_speaker_line(line: str) -> bool:
