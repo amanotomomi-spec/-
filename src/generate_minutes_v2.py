@@ -8,6 +8,7 @@ samples/002/expected_output/minutes_draft.docx を生成する。
 from pathlib import Path
 from docx import Document
 from docx.shared import Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 import re
 
 
@@ -195,9 +196,44 @@ BODY_PARAGRAPHS = [
 
 
 def add_paragraph(doc: Document, text: str, style: str = "Normal") -> None:
-    """段落を追加する。"""
+    """段落を追加する。
+    - 〇で始まる発言行：発言者部分（〇…君）をMSゴシック、発言内容をMS明朝
+    - （…）で始まる傍聴行：中央揃え
+    """
     para = doc.add_paragraph(style=style)
-    para.text = text
+
+    # 傍聴・括弧書き行は中央揃え
+    if text.startswith("（"):
+        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        para.add_run(text)
+        return
+
+    # 発言行（〇または○で始まる）：発言者部分をMSゴシック
+    # 例: 〇議長（岡村　正司君）　発言内容
+    m = re.match(r"(〇[^（]*（[^）]*君）)(　.*)?$", text, re.DOTALL)
+    if m:
+        speaker_part = m.group(1)          # 例: 〇議長（岡村　正司君）
+        content_part = m.group(2) or ""   # 例: 　日程第１…
+
+        # 発言者部分：MSゴシック
+        run_speaker = para.add_run(speaker_part)
+        run_speaker.font.name = "ＭＳ ゴシック"
+        run_speaker.font.size = Pt(10.5)
+
+        # 発言内容部分：MS明朝（Normalスタイルのまま）
+        if content_part:
+            run_content = para.add_run(content_part)
+            run_content.font.name = "ＭＳ 明朝"
+            run_content.font.size = Pt(10.5)
+        return
+
+    # 継続行（行頭が全角スペース）：MS明朝
+    if text.startswith("　") or not text:
+        para.add_run(text)
+        return
+
+    # それ以外は通常テキスト
+    para.add_run(text)
 
 
 def is_agenda_heading(text: str) -> bool:
@@ -368,19 +404,14 @@ def generate_minutes(output_path: str) -> None:
     # ==========================
     for speaker, content in BODY_PARAGRAPHS:
         if content is None:
-            # 日程見出し・傍聴・起立行など
-            if is_agenda_heading(speaker) or is_audience_line(speaker):
+            # 日程見出し行の前だけ1行空ける（傍聴・起立行は空けない）
+            if is_agenda_heading(speaker):
                 add_paragraph(doc, "")
-                add_paragraph(doc, "")
-                add_paragraph(doc, speaker)
-            else:
-                add_paragraph(doc, speaker)
+            add_paragraph(doc, speaker)
         else:
-            # 通常の発言行
+            # 通常の発言行（発言者間に空行なし）
             lines = format_speech_lines(speaker, content)
-            first_line = lines[0]
-            add_paragraph(doc, first_line)
-            for line in lines[1:]:
+            for line in lines:
                 add_paragraph(doc, line)
 
     # ==========================
