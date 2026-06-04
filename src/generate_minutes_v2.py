@@ -5,12 +5,17 @@ samples/002/input/transcribed.txt を読み込み、
 samples/002/expected_output/minutes_draft.docx を生成する。
 """
 
+from __future__ import annotations
 from pathlib import Path
 from docx import Document
 from docx.shared import Pt, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 import re
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from meeting_config import MeetingConfig
 
 
 def set_font_eastasia(run, font_name: str) -> None:
@@ -434,13 +439,19 @@ def generate_minutes(output_path: str) -> None:
     print(f"Saved: {output_path}")
 
 
-def generate_minutes_from_notta(notta_txt_path: str, output_path: str) -> None:
-    """NottaのTXTファイルから議事録Wordファイルを自動生成する。"""
+def generate_minutes_from_notta(
+    notta_txt_path: str,
+    output_path: str,
+    config: "MeetingConfig | None" = None,
+) -> None:
+    """NottaのTXTファイルから議事録Wordファイルを自動生成する。
+    config が指定された場合は会議固有設定を使用する。省略時はハードコード定数を使用。
+    """
     import sys
     sys.path.insert(0, str(Path(__file__).parent))
     from parse_notta import parse_notta_txt, UNKNOWN
 
-    blocks = parse_notta_txt(notta_txt_path)
+    blocks = parse_notta_txt(notta_txt_path, config=config)
 
     # blocksをBODY_PARAGRAPHS形式に変換
     body: list[tuple[str, str | None]] = []
@@ -455,67 +466,102 @@ def generate_minutes_from_notta(notta_txt_path: str, output_path: str) -> None:
         print(f"⚠️  発言者不明: {unknown_count}件（【要確認】マーク付きで出力）")
 
     doc = Document()
-    _add_header(doc)
+    _add_header(doc, config=config)
     _add_body(doc, body)
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     doc.save(output_path)
     print(f"Saved: {output_path}")
 
 
-def _add_header(doc: Document) -> None:
-    """告示〜開会時刻を追加する。"""
+def _add_header(doc: Document, config: "MeetingConfig | None" = None) -> None:
+    """告示〜開会時刻を追加する。config が指定された場合はその値を優先する。"""
+    # config または ハードコード定数から値を取得
+    title = config.title if config else MEETING_INFO["title_style"]
+    date = config.date if config else MEETING_INFO["meeting_date"]
+    open_time = config.open_time if config else MEETING_INFO["open_time"]
+    agenda_items = config.agenda_items if config else AGENDA_ITEMS
+    attending_members = config.attending_members if config else ATTENDING_MEMBERS
+    absent_members = config.absent_members if config else ABSENT_MEMBERS
+    seat_members = config.seat_members if config else SEAT_MEMBERS
+    absent_seat = config.absent_seat if config else ABSENT_SEAT
+    clerk_staff = config.clerk_staff if config else CLERK_STAFF
+    explain_staff = config.explain_staff if config else EXPLAIN_STAFF
+
+    # 告示部分の招集文（タイトルから会議名を生成）
+    # 例: "令和８年第２回（臨時会）椎葉村議会会議録（第１日）" →
+    #     "令和８年第２回椎葉村議会臨時会"
+    import re as _re
+    m_kaigi = _re.search(r"(令和\d+年第\d+回)[（(]([^）)]+)[）)](椎葉村議会)", title)
+    if m_kaigi:
+        kaigi_name = f"{m_kaigi.group(1)}{m_kaigi.group(3)}{m_kaigi.group(2)}"
+    else:
+        kaigi_name = "令和８年第２回椎葉村議会臨時会"
+
+    # 日付（金）部分を告示用に整形
+    m_date = _re.search(r"(令和\d+年\d+月\d+日)", date)
+    date_short = m_date.group(1) if m_date else date
+
     add_paragraph(doc, "椎葉村告示第　　号")
-    add_paragraph(doc, "令和８年第２回椎葉村議会臨時会を下記のとおり招集する。")
-    add_paragraph(doc, "　　　　　　　　　　　　　　　　令和８年５月　　日")
+    add_paragraph(doc, f"{kaigi_name}を下記のとおり招集する。")
+    add_paragraph(doc, f"　　　　　　　　　　　　　　　　{date_short[:7]}　　日")
     add_paragraph(doc, "椎葉村長　黒木　保隆")
     add_paragraph(doc, "")
-    add_paragraph(doc, "１　期　日\t令和８年５月２２日（金）")
+    add_paragraph(doc, f"１　期　日\t{date_short}（金）")
     add_paragraph(doc, "２　場　所\t椎葉村議場")
     add_paragraph(doc, "３　付議すべき事件")
-    for item in AGENDA_ITEMS[3:]:
+    for item in agenda_items[3:]:
         m = re.match(r"日程第[ \d]+[　\t](.*)", item)
         if m:
             add_paragraph(doc, f"　　{m.group(1)}")
     add_paragraph(doc, "")
     add_paragraph(doc, "")
     add_paragraph(doc, "〇開会日に応招した議員")
-    for line in ATTENDING_MEMBERS:
+    for line in attending_members:
         add_paragraph(doc, line)
     add_paragraph(doc, "")
     add_paragraph(doc, "")
     add_paragraph(doc, "")
     add_paragraph(doc, "〇応招しなかった議員")
-    for line in ABSENT_MEMBERS:
+    for line in absent_members:
         add_paragraph(doc, line)
     for _ in range(7):
         add_paragraph(doc, "")
-    add_paragraph(doc, MEETING_INFO["title_style"], style="Title")
-    add_paragraph(doc, MEETING_INFO["meeting_date"])
+    add_paragraph(doc, title, style="Title")
+    add_paragraph(doc, date)
     add_paragraph(doc, "")
     add_paragraph(doc, "")
     add_paragraph(doc, "議事日程（第１号）")
-    add_paragraph(doc, "令和８年５月２２日（金）午後２時００分開会")
+    # 議事日程ヘッダー行（日付 + 開会時刻）
+    m_date2 = _re.search(r"(令和\d+年\d+月\d+日)", date)
+    date_ymd = m_date2.group(1) if m_date2 else date
+    m_dow = _re.search(r"（(.曜日)）", date)
+    dow = m_dow.group(1)[0] if m_dow else "金"
+    add_paragraph(doc, f"{date_ymd}（{dow}）{open_time}")
     add_paragraph(doc, "")
-    for item in AGENDA_ITEMS:
+    for item in agenda_items:
         add_paragraph(doc, item + " ")
     add_paragraph(doc, "")
     add_paragraph(doc, "")
     add_paragraph(doc, "")
     add_paragraph(doc, "本日の会議に付した事件")
     add_paragraph(doc, "")
-    for item in AGENDA_ITEMS:
+    for item in agenda_items:
         add_paragraph(doc, item + " ")
     add_paragraph(doc, "")
     add_paragraph(doc, "")
     add_paragraph(doc, "")
-    add_paragraph(doc, "出席議員（９名）")
-    for line in SEAT_MEMBERS:
+    attending_count = sum(
+        len(line.split("\t")) for line in seat_members
+    )
+    absent_count = len(absent_seat)
+    add_paragraph(doc, f"出席議員（{attending_count}名）")
+    for line in seat_members:
         add_paragraph(doc, line)
     add_paragraph(doc, "")
     add_paragraph(doc, "")
     add_paragraph(doc, "")
-    add_paragraph(doc, "欠席議員（１名）")
-    for line in ABSENT_SEAT:
+    add_paragraph(doc, f"欠席議員（{absent_count}名）")
+    for line in absent_seat:
         add_paragraph(doc, line)
     add_paragraph(doc, "")
     add_paragraph(doc, "")
@@ -524,16 +570,16 @@ def _add_header(doc: Document) -> None:
     add_paragraph(doc, "")
     add_paragraph(doc, "")
     add_paragraph(doc, "事務局出席職員職氏名")
-    for line in CLERK_STAFF:
+    for line in clerk_staff:
         add_paragraph(doc, line)
     add_paragraph(doc, "")
     add_paragraph(doc, "")
     add_paragraph(doc, "説明のため出席した者の職氏名")
-    for line in EXPLAIN_STAFF:
+    for line in explain_staff:
         add_paragraph(doc, line)
     add_paragraph(doc, "")
     add_paragraph(doc, "")
-    add_paragraph(doc, MEETING_INFO["open_time"])
+    add_paragraph(doc, open_time)
 
 
 def _add_body(doc: Document, body: list[tuple[str, str | None]]) -> None:

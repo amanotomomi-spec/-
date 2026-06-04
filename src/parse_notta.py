@@ -2,8 +2,13 @@
 Nottaが出力するTXTファイルを解析し、発言者ラベル付きの段落リストを返す。
 発言者情報がないため、キーワードルールで推定する。
 """
+from __future__ import annotations
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from meeting_config import MeetingConfig
 
 
 # ======================================================
@@ -169,8 +174,11 @@ AUDIENCE_PATTERNS: list[tuple[str, str]] = [
 ]
 
 
-def apply_corrections(text: str) -> str:
-    for wrong, correct in CORRECTIONS:
+def apply_corrections(
+    text: str, extra: list[tuple[str, str]] | None = None
+) -> str:
+    corrections = extra if extra is not None else CORRECTIONS
+    for wrong, correct in corrections:
         text = text.replace(wrong, correct)
     return text
 
@@ -181,17 +189,23 @@ def strip_prefix_role(text: str) -> str:
     return re.sub(pattern, "", text).strip()
 
 
-def detect_speaker(text: str, prev_speaker: str) -> str:
-    """段落から発言者を推定する。"""
+def detect_speaker(
+    text: str, prev_speaker: str, speaker_map: dict[str, str] | None = None
+) -> str:
+    """段落から発言者を推定する。speaker_mapが指定された場合はそちらを優先する。"""
+    effective_map = speaker_map if speaker_map is not None else SPEAKER
+
     # ルール1: 冒頭に役職名
     for pattern, role in PREFIX_RULES:
         if re.match(pattern, text):
-            return SPEAKER[role]
+            if role in effective_map:
+                return effective_map[role]
 
     # ルール2: 内容キーワード
     for pattern, role in CONTENT_RULES:
         if re.search(pattern, text):
-            return SPEAKER[role]
+            if role in effective_map:
+                return effective_map[role]
 
     # ルール3: 前の発言者を継続
     if prev_speaker and prev_speaker != UNKNOWN:
@@ -278,14 +292,28 @@ def split_multi_speaker_para(text: str) -> list[str]:
     return [text]
 
 
-def parse_notta_txt(path: str) -> list[dict]:
+def parse_notta_txt(
+    path: str, config: "MeetingConfig | None" = None
+) -> list[dict]:
     """
     NottaのTXTファイルを解析し、発言ブロックのリストを返す。
     各ブロック:
       {"type": "speech",    "speaker": str, "content": str}
       {"type": "audience",  "content": str}
       {"type": "agenda",    "content": str}  ← 日程見出し
+
+    config が指定された場合:
+      - config.speakers で発言者マッピングを上書き
+      - config.extra_corrections を追加補正辞書として使用
     """
+    # configが指定されたとき追加補正を適用するための補正リスト構築
+    effective_corrections = list(CORRECTIONS)
+    speaker_map: dict[str, str] | None = None
+    if config is not None:
+        effective_corrections = effective_corrections + list(config.extra_corrections)
+        if config.speakers:
+            speaker_map = config.speakers
+
     raw = Path(path).read_text(encoding="utf-8")
 
     # 段落に分割（ダブル改行区切り）
@@ -296,7 +324,7 @@ def parse_notta_txt(path: str) -> list[dict]:
 
     for para in paragraphs:
         # テキスト補正
-        para = apply_corrections(para)
+        para = apply_corrections(para, extra=effective_corrections if config is not None else None)
 
         # 空段落スキップ
         if not para:
@@ -318,7 +346,7 @@ def parse_notta_txt(path: str) -> list[dict]:
                 continue
 
             # 発言者検出
-            speaker = detect_speaker(sub_para, prev_speaker)
+            speaker = detect_speaker(sub_para, prev_speaker, speaker_map)
 
             # 役職冒頭ラベル除去
             content = strip_prefix_role(sub_para)
