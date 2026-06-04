@@ -434,12 +434,136 @@ def generate_minutes(output_path: str) -> None:
     print(f"Saved: {output_path}")
 
 
-if __name__ == "__main__":
-    output = "samples/002/expected_output/minutes_draft.docx"
-    generate_minutes(output)
+def generate_minutes_from_notta(notta_txt_path: str, output_path: str) -> None:
+    """NottaのTXTファイルから議事録Wordファイルを自動生成する。"""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from parse_notta import parse_notta_txt, UNKNOWN
 
-    # 生成確認：最初の50行を表示
-    doc = Document(output)
-    print("\n=== 生成ファイルの最初の50段落 ===")
+    blocks = parse_notta_txt(notta_txt_path)
+
+    # blocksをBODY_PARAGRAPHS形式に変換
+    body: list[tuple[str, str | None]] = []
+    for b in blocks:
+        if b["type"] in ("agenda", "audience"):
+            body.append((b["content"], None))
+        else:
+            body.append((b["speaker"], b["content"]))
+
+    unknown_count = sum(1 for b in blocks if b.get("speaker") == UNKNOWN)
+    if unknown_count:
+        print(f"⚠️  発言者不明: {unknown_count}件（【要確認】マーク付きで出力）")
+
+    doc = Document()
+    _add_header(doc)
+    _add_body(doc, body)
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    doc.save(output_path)
+    print(f"Saved: {output_path}")
+
+
+def _add_header(doc: Document) -> None:
+    """告示〜開会時刻を追加する。"""
+    add_paragraph(doc, "椎葉村告示第　　号")
+    add_paragraph(doc, "令和８年第２回椎葉村議会臨時会を下記のとおり招集する。")
+    add_paragraph(doc, "　　　　　　　　　　　　　　　　令和８年５月　　日")
+    add_paragraph(doc, "椎葉村長　黒木　保隆")
+    add_paragraph(doc, "")
+    add_paragraph(doc, "１　期　日\t令和８年５月２２日（金）")
+    add_paragraph(doc, "２　場　所\t椎葉村議場")
+    add_paragraph(doc, "３　付議すべき事件")
+    for item in AGENDA_ITEMS[3:]:
+        m = re.match(r"日程第[ \d]+[　\t](.*)", item)
+        if m:
+            add_paragraph(doc, f"　　{m.group(1)}")
+    add_paragraph(doc, "")
+    add_paragraph(doc, "")
+    add_paragraph(doc, "〇開会日に応招した議員")
+    for line in ATTENDING_MEMBERS:
+        add_paragraph(doc, line)
+    add_paragraph(doc, "")
+    add_paragraph(doc, "")
+    add_paragraph(doc, "")
+    add_paragraph(doc, "〇応招しなかった議員")
+    for line in ABSENT_MEMBERS:
+        add_paragraph(doc, line)
+    for _ in range(7):
+        add_paragraph(doc, "")
+    add_paragraph(doc, MEETING_INFO["title_style"], style="Title")
+    add_paragraph(doc, MEETING_INFO["meeting_date"])
+    add_paragraph(doc, "")
+    add_paragraph(doc, "")
+    add_paragraph(doc, "議事日程（第１号）")
+    add_paragraph(doc, "令和８年５月２２日（金）午後２時００分開会")
+    add_paragraph(doc, "")
+    for item in AGENDA_ITEMS:
+        add_paragraph(doc, item + " ")
+    add_paragraph(doc, "")
+    add_paragraph(doc, "")
+    add_paragraph(doc, "")
+    add_paragraph(doc, "本日の会議に付した事件")
+    add_paragraph(doc, "")
+    for item in AGENDA_ITEMS:
+        add_paragraph(doc, item + " ")
+    add_paragraph(doc, "")
+    add_paragraph(doc, "")
+    add_paragraph(doc, "")
+    add_paragraph(doc, "出席議員（９名）")
+    for line in SEAT_MEMBERS:
+        add_paragraph(doc, line)
+    add_paragraph(doc, "")
+    add_paragraph(doc, "")
+    add_paragraph(doc, "")
+    add_paragraph(doc, "欠席議員（１名）")
+    for line in ABSENT_SEAT:
+        add_paragraph(doc, line)
+    add_paragraph(doc, "")
+    add_paragraph(doc, "")
+    add_paragraph(doc, "")
+    add_paragraph(doc, "\t欠員（なし）\t")
+    add_paragraph(doc, "")
+    add_paragraph(doc, "")
+    add_paragraph(doc, "事務局出席職員職氏名")
+    for line in CLERK_STAFF:
+        add_paragraph(doc, line)
+    add_paragraph(doc, "")
+    add_paragraph(doc, "")
+    add_paragraph(doc, "説明のため出席した者の職氏名")
+    for line in EXPLAIN_STAFF:
+        add_paragraph(doc, line)
+    add_paragraph(doc, "")
+    add_paragraph(doc, "")
+    add_paragraph(doc, MEETING_INFO["open_time"])
+
+
+def _add_body(doc: Document, body: list[tuple[str, str | None]]) -> None:
+    """本文（発言・傍聴・日程見出し）を追加する。"""
+    for speaker, content in body:
+        if content is None:
+            if is_agenda_heading(speaker):
+                add_paragraph(doc, "")
+            add_paragraph(doc, speaker)
+        else:
+            lines = format_speech_lines(speaker, content)
+            for line in lines:
+                add_paragraph(doc, line)
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="椎葉村議会 議事録生成")
+    parser.add_argument("--notta", help="NottaのTXTファイルパス（省略時はハードコード版）")
+    parser.add_argument("--output", default="samples/002/expected_output/minutes_draft.docx")
+    args = parser.parse_args()
+
+    if args.notta:
+        print(f"Nottaファイルから自動生成: {args.notta}")
+        generate_minutes_from_notta(args.notta, args.output)
+    else:
+        print("ハードコード版で生成")
+        generate_minutes(args.output)
+
+    doc = Document(args.output)
+    print(f"\n=== 生成完了: {len(doc.paragraphs)}段落 ===")
     for i, para in enumerate(doc.paragraphs[:50]):
         print(f"{i:3d}: [{para.style.name}] {para.text[:80]}")
