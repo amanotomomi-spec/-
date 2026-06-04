@@ -7,9 +7,21 @@ samples/002/expected_output/minutes_draft.docx を生成する。
 
 from pathlib import Path
 from docx import Document
-from docx.shared import Pt
+from docx.shared import Pt, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
 import re
+
+
+def set_font_eastasia(run, font_name: str) -> None:
+    """日本語フォントを正しく設定する（東アジア文字フォントのXML属性を直接設定）。"""
+    run.font.name = font_name
+    rPr = run._r.get_or_add_rPr()
+    rFonts = rPr.get_or_add_rFonts()
+    rFonts.set(qn("w:ascii"), font_name)
+    rFonts.set(qn("w:hAnsi"), font_name)
+    rFonts.set(qn("w:eastAsia"), font_name)
+    rFonts.set(qn("w:cs"), font_name)
 
 
 # ========================================================
@@ -197,43 +209,43 @@ BODY_PARAGRAPHS = [
 
 def add_paragraph(doc: Document, text: str, style: str = "Normal") -> None:
     """段落を追加する。
+    - 全段落の space_after / space_before を 0 に設定（空行なし）
     - 〇で始まる発言行：発言者部分（〇…君）をMSゴシック、発言内容をMS明朝
     - （…）で始まる傍聴行：中央揃え
     """
     para = doc.add_paragraph(style=style)
+    # 段落前後の間隔を完全に0にする
+    para.paragraph_format.space_after = Pt(0)
+    para.paragraph_format.space_before = Pt(0)
 
     # 傍聴・括弧書き行は中央揃え
     if text.startswith("（"):
         para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        para.add_run(text)
+        run = para.add_run(text)
+        run.font.size = Pt(10.5)
+        set_font_eastasia(run, "ＭＳ 明朝")
         return
 
-    # 発言行（〇または○で始まる）：発言者部分をMSゴシック
-    # 例: 〇議長（岡村　正司君）　発言内容
+    # 発言行（〇で始まる）：発言者部分をMSゴシック、内容をMS明朝
     m = re.match(r"(〇[^（]*（[^）]*君）)(　.*)?$", text, re.DOTALL)
     if m:
-        speaker_part = m.group(1)          # 例: 〇議長（岡村　正司君）
-        content_part = m.group(2) or ""   # 例: 　日程第１…
+        speaker_part = m.group(1)        # 例: 〇議長（岡村　正司君）
+        content_part = m.group(2) or ""  # 例: 　日程第１…
 
-        # 発言者部分：MSゴシック
         run_speaker = para.add_run(speaker_part)
-        run_speaker.font.name = "ＭＳ ゴシック"
         run_speaker.font.size = Pt(10.5)
+        set_font_eastasia(run_speaker, "ＭＳ ゴシック")
 
-        # 発言内容部分：MS明朝（Normalスタイルのまま）
         if content_part:
             run_content = para.add_run(content_part)
-            run_content.font.name = "ＭＳ 明朝"
             run_content.font.size = Pt(10.5)
+            set_font_eastasia(run_content, "ＭＳ 明朝")
         return
 
-    # 継続行（行頭が全角スペース）：MS明朝
-    if text.startswith("　") or not text:
-        para.add_run(text)
-        return
-
-    # それ以外は通常テキスト
-    para.add_run(text)
+    # それ以外（継続行・地の文・日程見出しなど）
+    run = para.add_run(text)
+    run.font.size = Pt(10.5)
+    set_font_eastasia(run, "ＭＳ 明朝")
 
 
 def is_agenda_heading(text: str) -> bool:
