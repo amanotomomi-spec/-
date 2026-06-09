@@ -488,25 +488,31 @@ def _add_header(doc: Document, config: "MeetingConfig | None" = None) -> None:
     explain_staff = config.explain_staff if config else EXPLAIN_STAFF
 
     # 告示部分の招集文（タイトルから会議名を生成）
-    # 例: "令和８年第２回（臨時会）椎葉村議会会議録（第１日）" →
-    #     "令和８年第２回椎葉村議会臨時会"
+    # パターン1: "令和８年第２回（臨時会）椎葉村議会会議録" → "令和８年第２回椎葉村議会臨時会"
+    # パターン2: "令和８年椎葉村議会６月定例会会議録" → "令和８年椎葉村議会６月定例会"
     import re as _re
     m_kaigi = _re.search(r"(令和\d+年第\d+回)[（(]([^）)]+)[）)](椎葉村議会)", title)
     if m_kaigi:
         kaigi_name = f"{m_kaigi.group(1)}{m_kaigi.group(3)}{m_kaigi.group(2)}"
     else:
-        kaigi_name = "令和８年第２回椎葉村議会臨時会"
+        m_kaigi2 = _re.search(r"(令和\d+年椎葉村議会.+?(?:定例会|臨時会))会議録", title)
+        if m_kaigi2:
+            kaigi_name = m_kaigi2.group(1)
+        else:
+            kaigi_name = title.split("会議録")[0] if "会議録" in title else title
 
-    # 日付（金）部分を告示用に整形
+    # 日付（曜日）部分を告示用に整形
     m_date = _re.search(r"(令和\d+年\d+月\d+日)", date)
     date_short = m_date.group(1) if m_date else date
+    m_dow = _re.search(r"（(.曜日)）", date)
+    dow_char = m_dow.group(1)[0] if m_dow else "　"
 
     add_paragraph(doc, "椎葉村告示第　　号")
     add_paragraph(doc, f"{kaigi_name}を下記のとおり招集する。")
     add_paragraph(doc, f"　　　　　　　　　　　　　　　　{date_short[:7]}　　日")
     add_paragraph(doc, "椎葉村長　黒木　保隆")
     add_paragraph(doc, "")
-    add_paragraph(doc, f"１　期　日\t{date_short}（金）")
+    add_paragraph(doc, f"１　期　日\t{date_short}（{dow_char}）")
     add_paragraph(doc, "２　場　所\t椎葉村議場")
     add_paragraph(doc, "３　付議すべき事件")
     for item in agenda_items[3:]:
@@ -550,9 +556,16 @@ def _add_header(doc: Document, config: "MeetingConfig | None" = None) -> None:
     add_paragraph(doc, "")
     add_paragraph(doc, "")
     add_paragraph(doc, "")
-    attending_count = sum(
-        len(line.split("\t")) for line in seat_members
-    )
+    # 出席議員数: configにattending_countがあれば使用、なければseat_membersから算出
+    if config and config.attending_count > 0:
+        attending_count = config.attending_count
+    else:
+        # 各行から実際の人数をカウント（タブ区切り or スペース区切り）
+        cnt = 0
+        for line in seat_members:
+            parts = [p.strip() for p in re.split(r"[\t　 ]{2,}", line) if p.strip()]
+            cnt += len(parts) if parts else 1
+        attending_count = cnt
     absent_count = len(absent_seat)
     add_paragraph(doc, f"出席議員（{attending_count}名）")
     for line in seat_members:

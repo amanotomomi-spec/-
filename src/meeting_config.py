@@ -17,6 +17,7 @@ class MeetingConfig:
     agenda_items: list[str]
 
     # 出席者
+    attending_count: int
     attending_members: list[str]
     absent_members: list[str]
     seat_members: list[str]
@@ -54,6 +55,7 @@ def load_config(path: str) -> MeetingConfig:
         date=meeting["date"],
         open_time=meeting["open_time"],
         agenda_items=data.get("agenda_items", []),
+        attending_count=members.get("attending_count", 0),
         attending_members=members.get("attending", []),
         absent_members=members.get("absent", []),
         seat_members=members.get("seats", []),
