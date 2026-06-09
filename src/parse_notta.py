@@ -347,30 +347,131 @@ def is_audience_text(text: str) -> tuple[bool, str]:
 
 def split_vote_sequence(text: str) -> list[tuple[str, str | None]]:
     """
-    「討論はありませんか？討論なしと認めます。…採決…御起立願います。ご着席ください。起立全員であります。」
-    のような長い段落を、採決フロー部分で分割して傍聴行を挿入する。
-    戻り値: (content_or_audience, speaker_or_None) のリスト
+    旧APIとの互換性のために残す。split_procedural_sequence へ委譲。
+    """
+    return split_procedural_sequence(text)
+
+
+# 議事進行の傍聴行自動挿入パターン
+# (質問パターン, 認定パターン, 挿入する傍聴行テキスト)
+PROCEDURAL_PATTERNS: list[tuple[str, str, str]] = [
+    (
+        r"(ご|御)異議ありませんか[。、？?]?",
+        r"異議なしと認めます",
+        "（「異議なし」と呼ぶ者あり）",
+    ),
+    (
+        r"質疑はありませんか[。、？?]?",
+        r"質疑なしと認めます",
+        "（「質疑なし」と呼ぶ者あり）",
+    ),
+    (
+        r"反対討論はありませんか[。、？?]?",
+        r"反対討論なしと認めます",
+        "（「反対討論なし」と呼ぶ者あり）",
+    ),
+    (
+        r"賛成討論はありませんか[。、？?]?",
+        r"賛成討論なしと認めます",
+        "（「賛成討論なし」と呼ぶ者あり）",
+    ),
+    (
+        r"討論はありませんか[。、？?]?",
+        r"討論なしと認めます",
+        "（「討論なし」と呼ぶ者あり）",
+    ),
+]
+
+
+def split_procedural_sequence(text: str) -> list[tuple[str, str | None]]:
+    """
+    議事進行パターン（起立・傍聴行）を含む長い段落を分割して傍聴行を挿入する。
+
+    対応パターン:
+    - 「ご起立願います。…ご着席ください。起立全員であります。」 → （賛成者起立）を挿入
+    - 「ご異議ありませんか？…異議なしと認めます」 → 傍聴行を間に挿入
+    - 「質疑はありませんか？…質疑なしと認めます」 → 傍聴行を間に挿入
+    - 「反対討論はありませんか？…反対討論なしと認めます」 → 傍聴行を間に挿入
+    - 「賛成討論はありませんか？…賛成討論なしと認めます」 → 傍聴行を間に挿入
+    - 「討論はありませんか？…討論なしと認めます」 → 傍聴行を間に挿入
+
+    戻り値: (content_or_audience, "speech"|"audience") のリスト
     """
     results: list[tuple[str, str | None]] = []
+    remaining = text
 
-    # 起立～着席のパターンで分割
-    pattern = r"((御|ご)起立願います[。、]?)(.*?)(ご着席ください[。、]?)(.*?)(起立全員|規律全員|期日全員)であります"
-    m = re.search(pattern, text, re.DOTALL)
-    if m:
-        before = text[:m.start()].strip()
-        after = text[m.end():].strip()
-        if before:
-            results.append((before, "speech"))
-        results.append(("（賛成者起立）", "audience"))
-        if after:
-            suffix = "ご着席ください。起立全員であります。" + after
-            results.append((suffix, "speech"))
-        else:
-            results.append(("ご着席ください。起立全員であります。", "speech"))
-    else:
-        results.append((text, "speech"))
+    changed = True
+    while changed:
+        changed = False
 
-    return results
+        # --- 起立パターン ---
+        vote_pattern = r"((御|ご)起立願います[。、]?)(.*?)(ご着席ください[。、]?)(.*?)(起立全員|規律全員|期日全員)であります"
+        m = re.search(vote_pattern, remaining, re.DOTALL)
+        if m:
+            before = remaining[:m.start()].strip()
+            after = remaining[m.end():].strip()
+            if before:
+                results.append((before, "speech"))
+            results.append(("（賛成者起立）", "audience"))
+            suffix = "ご着席ください。起立全員であります。"
+            remaining = (suffix + after) if after else suffix
+            changed = True
+            continue
+
+        # --- 傍聴行パターン（質疑・討論・異議）---
+        for ask_pat, confirm_pat, audience_text in PROCEDURAL_PATTERNS:
+            m_ask = re.search(ask_pat, remaining)
+            if not m_ask:
+                continue
+            # 確認フレーズが質問フレーズより後にあるか
+            m_confirm = re.search(confirm_pat, remaining[m_ask.end():])
+            if not m_confirm:
+                continue
+            confirm_start = m_ask.end() + m_confirm.start()
+            # 質問フレーズ末尾 ~ 確認フレーズ先頭の間にテキストが少ない場合のみ分割
+            # （別人の発言が挟まる可能性を避けるため200文字以内）
+            gap = remaining[m_ask.end():confirm_start]
+            if len(gap) > 200:
+                continue
+            # 分割点: 質問フレーズ末尾で分割
+            split_at = m_ask.end()
+            before = remaining[:split_at].strip()
+            after = remaining[split_at:].strip()
+            if before:
+                results.append((before, "speech"))
+            results.append((audience_text, "audience"))
+            remaining = after
+            changed = True
+            break
+
+    if remaining.strip():
+        results.append((remaining.strip(), "speech"))
+
+    return results if results else [(text, "speech")]
+
+
+# 漢数字→全角アラビア数字マッピング（日程番号用）
+KANJI_NUM_MAP: dict[str, str] = {
+    "一": "１", "二": "２", "三": "３", "四": "４", "五": "５",
+    "六": "６", "七": "７", "八": "８", "九": "９",
+    "十一": "１１", "十二": "１２", "十三": "１３", "十四": "１４", "十五": "１５",
+    "十六": "１６", "十七": "１７", "十八": "１８", "十九": "１９",
+    "十": "１０", "二十": "２０",
+}
+
+
+def convert_kanji_agenda_num(text: str) -> str:
+    """「日程第X」のXが漢数字の場合、全角アラビア数字に変換する。"""
+    def replace_num(m: re.Match) -> str:
+        kanji = m.group(1)
+        arabic = KANJI_NUM_MAP.get(kanji, kanji)
+        return f"日程第{arabic}"
+
+    # 二十より先に二十X系、十X系を処理するため長い順にソート済みのKANJI_NUM_MAPを使う
+    # re.subで一度に処理するためにパターンを組み立てる
+    kanji_keys = sorted(KANJI_NUM_MAP.keys(), key=len, reverse=True)
+    pattern = r"日程第(" + "|".join(re.escape(k) for k in kanji_keys) + r")"
+    return re.sub(pattern, replace_num, text)
 
 
 def to_zenkaku(text: str) -> str:
@@ -465,12 +566,55 @@ def parse_notta_txt(
             if not sub_para:
                 continue
 
-            # 日程見出し検出（短い段落のみ）
-            m_agenda = re.search(r"日程第(\d+|一|二|三|四|五|六|七|八|九|十[一二三四五]?)[　\s]", sub_para)
-            if m_agenda and len(sub_para) < 60:
-                content = to_zenkaku(sub_para)
-                blocks.append({"type": "agenda", "content": content})
-                continue
+            # 漢数字の日程番号を全角アラビア数字に変換
+            sub_para = convert_kanji_agenda_num(sub_para)
+
+            # 日程見出し検出（短い段落 or 長い発言の先頭が「日程第X」で始まる場合も対応）
+            m_agenda = re.match(
+                r"^(日程第[１２３４５６７８９０\d]+[　\s]\S.*?)([。　\s]|$)", sub_para
+            )
+            if not m_agenda:
+                # 短い段落の検出（旧動作互換）
+                m_agenda_old = re.search(
+                    r"日程第(\d+|[１２３４５６７８９０]+)[　\s]", sub_para
+                )
+                if m_agenda_old and len(sub_para) < 60:
+                    content = to_zenkaku(sub_para)
+                    blocks.append({"type": "agenda", "content": content})
+                    continue
+
+            if m_agenda:
+                # 「日程第X　タイトル」の先頭部分からagendaブロックを生成
+                # config.agenda_itemsから正式なタイトルを探す
+                agenda_num_m = re.match(r"日程第([１２３４５６７８９０\d]+)", sub_para)
+                agenda_title = None
+                if agenda_num_m and config is not None and hasattr(config, "agenda_items"):
+                    num_str = agenda_num_m.group(1)
+                    # 全角数字→半角数字に変換して比較
+                    num_h = str(int(num_str.translate(str.maketrans("０１２３４５６７８９", "0123456789"))))
+                    for item in config.agenda_items:
+                        item_m = re.match(r"日程第\s*(\d+)", item)
+                        if item_m and item_m.group(1) == num_h:
+                            agenda_title = item
+                            break
+                if agenda_title is None:
+                    # configにない場合は発言から先頭の日程見出し部分を使う
+                    # 「日程第X、内容を議題とします」→「日程第X　内容」
+                    agenda_title_m = re.match(
+                        r"(日程第[１２３４５６７８９０\d]+)[　\s、,](.{1,40}?)(?:[をは]議題|[をは]行います|[。、]|$)",
+                        sub_para,
+                    )
+                    if agenda_title_m:
+                        agenda_title = f"{agenda_title_m.group(1)}　{agenda_title_m.group(2)}"
+                    else:
+                        agenda_title = sub_para[:60]
+
+                blocks.append({"type": "agenda", "content": agenda_title})
+
+                # 短い段落（見出しのみ）ならここで終了
+                if len(sub_para) < 60:
+                    continue
+                # 長い発言の場合は続きのテキストも処理する（発言はそのまま残す）
 
             # 発言者検出
             speaker = detect_speaker(sub_para, prev_speaker, speaker_map)
@@ -479,7 +623,7 @@ def parse_notta_txt(
             content = strip_prefix_role(sub_para)
 
             # 採決フロー分割
-            sub_items = split_vote_sequence(content)
+            sub_items = split_procedural_sequence(content)
 
             for sub_content, sub_type in sub_items:
                 sub_content = sub_content.strip()
