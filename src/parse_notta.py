@@ -475,9 +475,12 @@ def convert_kanji_agenda_num(text: str) -> str:
 
 
 def to_zenkaku(text: str) -> str:
-    """半角英数字・記号を全角に変換。"""
+    """半角英数字・記号を全角に変換。半角・全角の？は。に変換する。"""
     result = []
     for ch in text:
+        if ch == "?":
+            result.append("。")
+            continue
         code = ord(ch)
         if 0x21 <= code <= 0x7E:
             result.append(chr(code + 0xFEE0))
@@ -485,7 +488,85 @@ def to_zenkaku(text: str) -> str:
             result.append("　")
         else:
             result.append(ch)
-    return "".join(result)
+    return "".join(result).replace("？", "。")
+
+
+def _kanji_to_zenkaku_arabic(kanji: str) -> str:
+    """漢数字文字列を全角アラビア数字に変換（99まで対応）。変換できない場合は元の文字列を返す。"""
+    _map = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+            "六": 6, "七": 7, "八": 8, "九": 9}
+    t = kanji.strip()
+    if t in _map:
+        n = _map[t]
+    elif t == "十":
+        n = 10
+    elif t.startswith("十"):
+        n = 10 + _map.get(t[1:], 0)
+    elif t.endswith("十") and len(t) == 2:
+        n = _map.get(t[0], 0) * 10
+    elif "十" in t:
+        idx = t.index("十")
+        tens = _map.get(t[:idx], 0) if t[:idx] else 1
+        ones = _map.get(t[idx + 1:], 0) if t[idx + 1:] else 0
+        n = tens * 10 + ones
+    else:
+        return kanji
+    return str(n).translate(str.maketrans("0123456789", "０１２３４５６７８９"))
+
+
+def apply_regex_corrections(text: str) -> str:
+    """正規表現ベースの補正を適用する（款・項・目の誤変換、漢数字変換、？除去）。"""
+    # 款の誤認識補正（菅野→款の、漢の→款の 等）
+    text = re.sub(r"[菅感漢甲][のノ](?=\d|[一二三四五六七八九十])", "款の", text)
+
+    # 款・項・目 の後の漢数字を全角アラビア数字に変換（例: 款の一一→款の１１）
+    def _replace_kk(m: re.Match) -> str:
+        return f"{m.group(1)}の{_kanji_to_zenkaku_arabic(m.group(2))}"
+
+    text = re.sub(r"(款|項|目)の([一二三四五六七八九十]+)", _replace_kk, text)
+
+    # 第X条・第X項・第X号・第X款・第X節・第X点・第X表 の漢数字を変換
+    def _replace_dai(m: re.Match) -> str:
+        arabic = _kanji_to_zenkaku_arabic(m.group(1))
+        return f"第{arabic}{m.group(2)}"
+
+    text = re.sub(r"第([一二三四五六七八九十]+)(条|項|号|款|節|点|表)", _replace_dai, text)
+
+    # 全角・半角数字と漢数字が混在するパターン（例: 第１０５十条→第１０５条、第190九条→第190条）
+    text = re.sub(r"第([0-9０-９]+)[一二三四五六七八九十百]+([条項号款節表])", r"第\1\2", text)
+
+    # 条の二・条の三 などの法条文支号（例: 第230条の二→第２３０条の２）
+    def _replace_jono(m: re.Match) -> str:
+        arabic = _kanji_to_zenkaku_arabic(m.group(1))
+        return f"条の{arabic}"
+
+    text = re.sub(r"条の([一二三四五六七八九十]+)", _replace_jono, text)
+
+    # X点目（例: 一点目→１点目）
+    def _replace_ptme(m: re.Match) -> str:
+        arabic = _kanji_to_zenkaku_arabic(m.group(1))
+        return f"{arabic}点目"
+
+    text = re.sub(r"([一二三四五六七八九十]+)点目", _replace_ptme, text)
+
+    # X項目（例: 一項目→１項目）
+    def _replace_komoku(m: re.Match) -> str:
+        arabic = _kanji_to_zenkaku_arabic(m.group(1))
+        return f"{arabic}項目"
+
+    text = re.sub(r"([一二三四五六七八九十]+)項目", _replace_komoku, text)
+
+    # 月の一日・月の二日 等の日付（例: ６月の一日→６月の１日）
+    def _replace_nichi(m: re.Match) -> str:
+        arabic = _kanji_to_zenkaku_arabic(m.group(1))
+        return f"の{arabic}日"
+
+    text = re.sub(r"の([一二三四五六七八九十]+)日", _replace_nichi, text)
+
+    # ？マーク除去（議事録では疑問符を使用しない）
+    text = text.replace("？", "。").replace("?", "。")
+
+    return text
 
 
 def split_multi_speaker_para(text: str) -> list[str]:
@@ -565,6 +646,9 @@ def parse_notta_txt(
             sub_para = sub_para.strip()
             if not sub_para:
                 continue
+
+            # 正規表現ベース補正（款・項・目、漢数字、？マーク）
+            sub_para = apply_regex_corrections(sub_para)
 
             # 漢数字の日程番号を全角アラビア数字に変換
             sub_para = convert_kanji_agenda_num(sub_para)
